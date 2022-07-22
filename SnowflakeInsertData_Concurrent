@@ -1,0 +1,73 @@
+import os
+import sys
+import time
+import psutil
+import pandas as pd
+import numpy  as np
+import concurrent.futures
+import datetime
+import snowflake.connector 
+from snowflake.connector.pandas_tools import write_pandas
+import pandas as pd
+
+# Approch 2 Concurrent Process
+def Insert_Into_Snowflake(df):
+    '''
+    do stuff
+    '''
+    pid  = os.getpid()
+    ppid = os.getppid()
+    start = time.time()
+    print("PPID %s->%s Started"%(ppid,pid))
+    # df['diff'] = datetime.datetime.now() - pd.to_datetime(df['OrderDate'])     
+    #  
+    scnn=snowflake.connector.connect(
+    user='aditipriya',
+    password='Ewn7sz4n',
+    account='un97199.us-east-2.aws',
+    warehouse='ABHAY_WAREHOUSE',
+    database='DATAMATCHING',
+    schema='PUBLIC')
+
+    st = datetime.datetime.now()
+    print('Start time ',st)
+    ts = time.time()    
+    print('Write to snowflake') 
+    print(df)    
+    SUCCESS,nchunks,nrows,_=write_pandas(scnn,df,'M10SAMPLE')  
+    et = datetime.datetime.now()   
+    print('End time ',et)
+    print('Time taken', time.time() - ts) 
+    stop  = time.time()
+    completed_in  = round(stop - start,2)
+    return(df)
+
+if __name__ == '__main__':
+
+    logical    = False
+    df_results = []
+    num_procs  = psutil.cpu_count(logical=logical)
+    if len(sys.argv) > 1:
+        num_procs = int(sys.argv[1])
+    print('Process ',num_procs)
+    print('Reading Parket file::')
+    parquet_file="Data/sample.parquet"
+    print(parquet_file)
+    big_dataframe=pd.read_parquet(parquet_file,engine="pyarrow").head(10)
+    print('File Read below data found')
+    big_dataframe.columns = big_dataframe.columns.str.upper()  
+    print(big_dataframe)
+    splitted_df = np.array_split(big_dataframe, num_procs)
+    start = time.time()
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_procs) as executor:
+        results = [ executor.submit(Insert_Into_Snowflake,df=df) for df in splitted_df ]
+        for result in concurrent.futures.as_completed(results):
+            try:
+                df_results.append(result.result())
+            except Exception as ex:
+                print('Errror::',str(ex))
+                pass
+    end = time.time()
+    print("-------------------------------------------")
+    print("PPID %s Completed in %s"%(os.getpid(), round(end-start,2)))
+    # df_results = pd.concat(df_results)

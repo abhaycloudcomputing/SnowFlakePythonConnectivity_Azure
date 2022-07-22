@@ -1,0 +1,35 @@
+import multiprocessing as mp
+import numpy as np
+import time
+
+import snowflake.connector 
+from snowflake.connector.pandas_tools import write_pandas
+import pandas as pd
+import pyarrow.parquet as pq
+import datetime;
+
+# Approch 1 Sequencial Process
+    
+print('Reading Parket file::')
+parquet_file="Data/sample.parquet"
+print(parquet_file)
+dfpr=pd.read_parquet(parquet_file,engine="pyarrow")
+print('File Read below data found')
+dfpr.columns = dfpr.columns.str.upper()  
+print(dfpr) 
+
+scnn=snowflake.connector.connect(
+    user='aditipriya',
+    password='Ewn7sz4n',
+    account='un97199.us-east-2.aws',
+    warehouse='ABHAY_WAREHOUSE',
+    database='DATAMATCHING',
+    schema='PUBLIC')
+
+print('Data Load Start::',datetime.datetime.now())
+ts = time.time()
+print('Write to snowflake') 
+SUCCESS,nchunks,nrows,_=write_pandas(scnn,dfpr,'M10SAMPLE',chunk_size=50000)  
+print('Data Load End::',datetime.datetime.now())
+
+print('Time taken', time.time() - ts)

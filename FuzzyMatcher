@@ -1,0 +1,113 @@
+import multiprocessing as mp
+import numpy as np
+import time
+
+import snowflake.connector 
+from snowflake.connector.pandas_tools import write_pandas
+import pandas as pd
+import pyarrow.parquet as pq
+import datetime;
+from fuzzywuzzy import process
+
+import logging
+import requests
+import json
+
+# Approch 1 Sequencial Process
+    
+# Azure user
+USER = "abhay.kumar@zelis.com"
+PASSWORD = "9UdjBvN3NZ!"
+
+# Snowflake options
+ACCOUNT = "ti97672.east-us-2.azure"
+WAREHOUSE = "DEV"
+DATABASE = "DEV_PROVIDER_PROFILE"
+SCHEMA = "DBT_RMURAHARISETTY"
+ROLE = "DATASCIENCE_DEVLOPER_ONSHORE"
+
+# Azure AD options
+AUTH_CLIENT_ID = "<AZURE_OAUTH_CLIENT_ID>"
+AUTH_CLIENT_SECRET = "<AZURE_OAUTH_CLIENT_SECRET>"
+AUTH_GRANT_TYPE = "password"
+SCOPE_URL = "<AZURE_SCOPE_URL>"
+TOKEN_URL = "<AZURE_TOKEN_URL>"
+PAYLOAD = "client_id={clientId}&" \
+          "client_secret={clientSecret}&" \
+          "username={userName}&" \
+          "password={password}&" \
+          "grant_type={grantType}&" \
+          "scope={scopeUrl}".format(clientId=AUTH_CLIENT_ID, clientSecret=AUTH_CLIENT_SECRET, userName=USER,
+                                    password=PASSWORD, grantType=AUTH_GRANT_TYPE, scopeUrl=SCOPE_URL)
+
+                                    
+
+logging.basicConfig(
+            filename="log.log",
+            level=logging.DEBUG)
+
+print("Getting JWT token")
+response = requests.post(TOKEN_URL, data=PAYLOAD)
+json_data = json.loads(response.text)
+TOKEN = json_data['access_token']
+print("Token obtained")
+
+# Snowflake connection
+print("connecting to Snowflake")
+conn = snowflake.connector.connect(
+                user=USER,
+                account=ACCOUNT,
+                role=ROLE,
+                authenticator="oauth",
+                token=TOKEN,
+                warehouse=WAREHOUSE,
+                database=DATABASE,
+                schema=SCHEMA,
+                client_session_keep_alive=True,
+                max_connection_pool=20
+                )
+
+cur = conn.cursor()
+print("connected to snowflake")
+
+
+print('Snow Flake Connection:')
+scnn=snowflake.connector.connect(
+    user='abhay.kumar@zelis.com',
+    password='9UdjBvN3NZ!',
+    account='ti97672.east-us-2.azure',
+    warehouse='DEV',
+    database='DEV_PROVIDER_PROFILE',
+    schema='PUBLIC')
+
+SqlMapperData="select * from DEV_PROVIDER_PROFILE"+"."+"DBT_RMURAHARISETTY"+"."+"STANDAREDMAPPER where  Firstname IS NOT NULL"
+
+print(SqlMapperData)
+
+
+# cur = scnn.cursor()  
+# # sql = "select * from TEST_SAMPLE1"
+# # cur.execute(sql)
+
+# cur.execute(SqlMapperData)
+# DfRepo = cur.fetch_pandas_all() 
+# print(DfRepo)
+
+# print("Fuzzy match Started::", datetime.datetime.now())
+# print(DfIncoming["EMAIL"].map(lambda x:process.extractOne(x,DfRepo["EMAIL"])))
+# #DfIncoming["TierMatchPer"]=DfIncoming["EMAIL"].map(lambda x:process.extractOne(x,DfRepo["EMAIL"]))
+
+# print("-------------------Matching-----------------")
+# print(DfIncoming)
+# print("Fuzzy match Ended::", datetime.datetime.now())
+
+# st = datetime.datetime.now()
+# print('Start time ',st)
+# ts = time.time()
+# print('Write to snowflake') 
+# SUCCESS,nchunks,nrows,_=write_pandas(scnn,dfpr,'TEST_SAMPLE1',chunk_size=50000)  
+# et = datetime.datetime.now()   
+# print('End time ',et)
+# print('Time taken', time.time() - ts)
+ 
+
