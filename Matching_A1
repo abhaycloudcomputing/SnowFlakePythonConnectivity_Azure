@@ -1,0 +1,65 @@
+import multiprocessing as mp
+import numpy as np
+import time
+
+import snowflake.connector 
+from snowflake.connector.pandas_tools import write_pandas
+import pandas as pd
+import pyarrow.parquet as pq
+import datetime;
+from fuzzywuzzy import process
+
+# Approch 1 Sequencial Process
+    
+# print('Reading Incoming file::')
+# # parquet_file="DataParquet/blocks-0012738509-0012739509_2.parquet"
+# CSV_file="Data/Result_Mod.CSV"
+# print(CSV_file)
+# DfIncoming=pd.read_csv(CSV_file)
+# print('File Read below data found')
+# DfIncoming.columns = DfIncoming.columns.str.upper()  
+# # dfpr=dfpr.tail(1)
+# # print(DfIncoming)
+# DfIncoming = DfIncoming.drop('REGISTRATION_DTTM', 1)
+# DfIncoming = DfIncoming.drop('BIRTHDATE', 1)
+# # dfpr=dfpr.tail(1)
+# print(DfIncoming) 
+
+scnn=snowflake.connector.connect(
+    user='SVC_PYTHONIDE',
+    password='Welcome12345',
+    account='ti97672.east-us-2.azure',
+    warehouse='DEV',
+    database='DEV_PROVIDER_REGISTRY',
+    schema='PUBLIC')
+
+cur = scnn.cursor()  
+print(cur)
+SqlProviderData = "select  * from "+'"'+"DEV_PROVIDER_REGISTRY"+'"'+"."+'"'+"DBO"+'"'+"."+'"'+"PROVIDER"+'"'
+SqlMapperData = "select  * from "+'"'+"DEV_PROVIDER_REGISTRY"+'"'+"."+'"'+"DBT_RMURAHARISETTY"+'"'+"."+'"'+"STANDAREDMAPPER"+'"'
+
+print(SqlMapperData)
+cur.execute(SqlMapperData)
+DFSqlMapperData = cur.fetch_pandas_all()
+print(DFSqlMapperData)
+
+# cur.execute(sql)
+# DfRepo = cur.fetch_pandas_all() 
+# print(DfRepo)
+# print("Fuzzy match Started::", datetime.datetime.now())
+# DfIncoming["Match"]=DfIncoming["EMAIL"].map(lambda x:process.extractOne(x,DfRepo["EMAIL"]))
+
+# print("-------------------Matching-----------------")
+# print(DfIncoming)
+# print("Fuzzy match Ended::", datetime.datetime.now())
+
+# st = datetime.datetime.now()
+# print('Start time ',st)
+# ts = time.time()
+# print('Write to snowflake') 
+# SUCCESS,nchunks,nrows,_=write_pandas(scnn,dfpr,'TEST_SAMPLE1',chunk_size=50000)  
+# et = datetime.datetime.now()   
+# print('End time ',et)
+# print('Time taken', time.time() - ts)
+ 
+
