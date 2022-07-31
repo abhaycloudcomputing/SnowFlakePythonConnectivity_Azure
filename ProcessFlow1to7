@@ -1,0 +1,362 @@
+#pip3 install -r requirements.txt
+#importing the required packages
+import snowflake.connector
+import pandas as pd
+import numpy as np
+from fuzzywuzzy import process
+from snowflake.connector.pandas_tools import write_pandas
+
+class stgMapper:
+    secret_keys = {"USER":"SCHENCHALA","PWD":"Snowflakes$12","ACCOUNT":"ilb44071.us-east-1","DATABASE":"TEST_ZELIS","SCHEMA":"PUBLIC"}
+
+    def __init__(self):
+        self.cur = snowflake.connector.connect(
+            user=stgMapper.secret_keys["USER"],
+            password=stgMapper.secret_keys["PWD"],
+            account=stgMapper.secret_keys["ACCOUNT"],
+            database=stgMapper.secret_keys['DATABASE'],
+            schema=stgMapper.secret_keys['SCHEMA']
+        )
+        self.cursor = self.cur.cursor()
+    
+    def closeConnection(self):
+        self.cursor.close()
+
+    def dataInsertion(self,tierTableDF, tableName, schemaName):
+        success, nchunks, nrows, _ = write_pandas(self.cur, tierTableDF, tableName, schema=schemaName)
+        print(success, nchunks, nrows)
+        
+    #Status value update in standardmapper table
+    def statusAddition(self):
+        self.cursor.execute('alter table STANDARDMAPPER add status number')
+
+    #below function has to be called at the end of each dataInsertion function call
+    def statusUpdate(self):
+        self.cursor.execute('update STANDARDMAPPER set status = 11 where importid in(select importid from STG_PROVIDER_STANDARDMAPPER)')
+
+    def tier1DataRetrieve(self):
+        self.cursor.execute("select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER")
+        self.df_SM = self.cursor.fetch_pandas_all()
+        
+        self.cursor.execute("select * from TEST_ZELIS.PUBLIC.PROVIDER")
+        self.df_PR = self.cursor.fetch_pandas_all()
+
+        return self.df_SM, self.df_PR
+
+    #Tier 1
+    def updatedTier1(self,df_SM,df_PR):
+        self.df_SM1 = df_SM.dropna(subset=['SOURCEIMPORTPROVIDERID'])
+        self.df_PR1 = df_PR.dropna(subset=['SOURCEIMPORTPROVIDERID'])
+
+        self.df_matched = self.df_SM1.merge(self.df_PR1, on='SOURCEIMPORTPROVIDERID',indicator=True, suffixes=('_SM1','_PR1'))
+        self.df_TIER1 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+        self.df_TIER1.rename(columns={'_merge':'TIER'}, inplace=True)
+        self.df_TIER1['TIER'] = np.where(self.df_TIER1['TIER'] == 'both',1,0)
+        self.df_TIER1['CONFIDANCE_SCORE'] = 0
+        return self.df_TIER1
+
+    def tier2DataRetrieve(self):
+        self.cursor.execute('select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER where importid not in(select importid from STG_PROVIDER_STANDARDMAPPER)')
+        self.df_SM = self.cursor.fetch_pandas_all()
+        return self.df_SM
+
+    #Tier 2    
+    def updatedTier2(self,df_SM,df_PR):
+        self.df_SM2 = df_SM.dropna(subset=['NPI'])
+        self.df_PR2 = df_PR.dropna(subset=['NPI'])
+
+        self.df_matched = self.df_SM2.merge(self.df_PR2, on='NPI',indicator=True, suffixes=('_SM2','_PR2'))
+        self.df_TIER2 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+        self.df_TIER2.rename(columns={'_merge':'TIER'}, inplace=True)
+        self.df_TIER2['TIER'] = np.where(self.df_TIER2['TIER'] == 'both',2,0)
+        self.df_TIER2['CONFIDANCE_SCORE'] = 0
+        return self.df_TIER2
+
+    def tier3DataRetrieve(self):
+        self.cursor.execute('select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER where importid not in(select importid from STG_PROVIDER_STANDARDMAPPER)')
+        self.df_SM = self.cursor.fetch_pandas_all()
+        
+        self.cursor.execute('select p.*, pa.street1, pa.zipcode, pc.taxid from TEST_ZELIS.PUBLIC.PROVIDER p, TEST_ZELIS.PUBLIC.PROVIDERADDRESS pa, TEST_ZELIS.PUBLIC.PRACTICE pc where p.providerid=pa.providerid and pa.practiceid = pc.practiceid')
+        self.df_PR = self.cursor.fetch_pandas_all()
+
+        return self.df_SM, self.df_PR
+
+    #Tier 3        
+    def updatedTier3(self,df_SM3,df_PR3,prodType):
+        if prodType == 1:
+            self.df_PR31 = df_PR3.loc[df_PR3['PROVIDERTYPE'] == prodType]
+            self.df_PR31.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE','TAXID'],inplace=True)
+            #self.df_PR31['ZIPCODE'] = self.df_PR31['ZIPCODE'].astype(int)
+            self.df_PR31 = self.df_PR31.astype({'ZIPCODE':int})
+
+            self.df_SM31 = df_SM3.loc[df_SM3['PROVIDERTYPE'] == prodType]
+            self.df_SM31.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE','TAXID'],inplace=True)
+            
+            self.df_matched = self.df_SM31.merge(self.df_PR31, on=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE','TAXID'],indicator=True, suffixes=('_SM31','_PR31'))
+            self.df_TIER31 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER31.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER31['TIER'] = np.where(self.df_TIER31['TIER'] == 'both',3,0)
+            self.df_TIER31['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER31
+            
+        elif prodType == 2:
+            self.df_PR32 = df_PR3.loc[df_PR3['PROVIDERTYPE'] == prodType]
+            self.df_PR32.dropna(subset=['FACILITYNAME','STREET1','ZIPCODE','TAXID'],inplace=True)
+            #self.df_PR32['ZIPCODE'] = self.df_PR32['ZIPCODE'].astype(int)
+            self.df_PR32 = self.df_PR32.astype({'ZIPCODE':int})
+            
+            self.df_SM32 = df_SM3.loc[df_SM3['PROVIDERTYPE'] == prodType]
+            self.df_SM32.dropna(subset=['FACILITYNAME','STREET1','ZIPCODE','TAXID'],inplace=True)
+            
+            self.df_matched = self.df_SM32.merge(self.df_PR32, on=['FACILITYNAME','STREET1','ZIPCODE','TAXID'],indicator=True, suffixes=('_SM32','_PR32'))
+            self.df_TIER32 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER32.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER32['TIER'] = np.where(self.df_TIER32['TIER'] == 'both',3,0)
+            self.df_TIER32['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER32
+
+    def tier4DataRetrieve(self):
+        self.cursor.execute('select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER where importid not in(select importid from STG_PROVIDER_STANDARDMAPPER)')
+        self.df_SM = self.cursor.fetch_pandas_all()
+        
+        self.cursor.execute('select p.*, pa.street1, pa.street2, pa.city, pa.state, pa.zipcode from TEST_ZELIS.PUBLIC.PROVIDER p, TEST_ZELIS.PUBLIC.PROVIDERADDRESS pa where p.providerid=pa.providerid')
+        self.df_PR = self.cursor.fetch_pandas_all()
+
+        return self.df_SM, self.df_PR
+
+    #Tier 4
+    def updatedTier4(self,df_SM4,df_PR4,prodType):
+        if prodType == 1:
+            self.df_PR41 = df_PR4.loc[df_PR4['PROVIDERTYPE'] == prodType]
+            self.df_PR41.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE'],inplace=True)
+            #self.df_PR41['ZIPCODE'] = self.df_PR41['ZIPCODE'].astype(int)
+            self.df_PR41 = self.df_PR41.astype({'ZIPCODE':int})
+            
+            self.df_SM41 = df_SM4.loc[df_SM4['PROVIDERTYPE'] == prodType]
+            self.df_SM41.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE'],inplace=True)
+
+            self.df_matched = self.df_SM41.merge(self.df_PR41, on=['FIRSTNAME','LASTNAME','STREET1','STREET2','CITY','STATE','ZIPCODE'],indicator=True, suffixes=('_SM41','_PR41'))
+            self.df_TIER41 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER41.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER41['TIER'] = np.where(self.df_TIER41['TIER'] == 'both',4,0)
+            self.df_TIER41['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER41
+            
+        elif prodType == 2:
+            self.df_PR42 = df_PR4.loc[df_PR4['PROVIDERTYPE'] == prodType]
+            self.df_PR42.dropna(subset=['FACILITYNAME','STREET1','ZIPCODE'],inplace=True)
+            #self.df_PR42['ZIPCODE'] = self.df_PR42['ZIPCODE'].astype(int)
+            self.df_PR42 = self.df_PR42.astype({'ZIPCODE':int})
+            
+            self.df_SM42 = df_SM4.loc[df_SM4['PROVIDERTYPE'] == prodType]
+            self.df_SM42.dropna(subset=['FACILITYNAME','STREET1','ZIPCODE'],inplace=True)
+            
+            self.df_matched = self.df_SM42.merge(self.df_PR42, on=['FACILITYNAME','STREET1','STREET2','CITY','STATE','ZIPCODE'],indicator=True, suffixes=('_SM42','_PR42'))
+            self.df_TIER42 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER42.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER42['TIER'] = np.where(self.df_TIER42['TIER'] == 'both',4,0)
+            self.df_TIER42['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER42
+
+    def tier5DataRetrieve(self):
+        self.cursor.execute('select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER where importid not in(select importid from STG_PROVIDER_STANDARDMAPPER)')
+        self.df_SM = self.cursor.fetch_pandas_all()
+        
+        self.cursor.execute('select p.*, pa.street1, pa.city, pa.state, pa.zipcode from TEST_ZELIS.PUBLIC.PROVIDER p, TEST_ZELIS.PUBLIC.PROVIDERADDRESS pa where p.providerid=pa.providerid')
+        self.df_PR = self.cursor.fetch_pandas_all()
+
+        return self.df_SM, self.df_PR
+
+    #Tier 5
+    def updatedTier5(self,df_SM5,df_PR5,prodType):
+        if prodType == 1:
+            self.df_PR51 = df_PR5.loc[df_PR5['PROVIDERTYPE'] == prodType]
+            self.df_PR51.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE'],inplace=True)
+            #self.df_PR51['ZIPCODE'] = self.df_PR51['ZIPCODE'].astype(int)
+            self.df_PR51 = self.df_PR51.astype({'ZIPCODE':int})
+            
+            self.df_SM51 = df_SM5.loc[df_SM5['PROVIDERTYPE'] == prodType]
+            self.df_SM51.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','ZIPCODE'],inplace=True)
+            
+            self.df_matched = self.df_SM51.merge(self.df_PR51, on=['FIRSTNAME','LASTNAME','STREET1','CITY','STATE','ZIPCODE'],indicator=True, suffixes=('_SM51','_PR51'))
+            self.df_TIER51 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER51.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER51['TIER'] = np.where(self.df_TIER51['TIER'] == 'both',5,0)
+            self.df_TIER51['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER51
+            
+        elif prodType == 2:
+            self.df_PR52 = df_PR5.loc[df_PR5['PROVIDERTYPE'] == prodType]
+            self.df_PR52.dropna(subset=['FACILITYNAME','STREET1','ZIPCODE'],inplace=True)
+            #self.df_PR52['ZIPCODE'] = self.df_PR52['ZIPCODE'].astype(int)
+            self.df_PR52 = self.df_PR52.astype({'ZIPCODE':int})
+            
+            self.df_SM52 = df_SM5.loc[df_SM5['PROVIDERTYPE'] == prodType]
+            self.df_SM52.dropna(subset=['FACILITYNAME','STREET1','ZIPCODE'],inplace=True)
+            
+            self.df_matched = self.df_SM52.merge(self.df_PR52, on=['FACILITYNAME','STREET1','CITY','STATE','ZIPCODE'],indicator=True, suffixes=('_SM52','_PR52'))
+            self.df_TIER52 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER52.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER52['TIER'] = np.where(self.df_TIER52['TIER'] == 'both',5,0)
+            self.df_TIER52['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER52
+
+    def tier6DataRetrieve(self):
+        self.cursor.execute('select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER where importid not in(select importid from STG_PROVIDER_STANDARDMAPPER)')
+        self.df_SM = self.cursor.fetch_pandas_all()
+        
+        self.cursor.execute('select p.*, pa.street1, pa.state, pa.zipcode from TEST_ZELIS.PUBLIC.PROVIDER p, TEST_ZELIS.PUBLIC.PROVIDERADDRESS pa where p.providerid=pa.providerid')
+        self.df_PR = self.cursor.fetch_pandas_all()
+
+        return self.df_SM, self.df_PR
+            
+    #Tier 6
+    def updatedTier6(self,df_SM6,df_PR6,prodType):
+        if prodType == 1:
+            self.df_PR61 = df_PR6.loc[df_PR6['PROVIDERTYPE'] == prodType]
+            self.df_PR61.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','STATE','ZIPCODE'],inplace=True)
+            #self.df_PR61['ZIPCODE'] = self.df_PR61['ZIPCODE'].astype(int)
+            self.df_PR61 = self.df_PR61.astype({'ZIPCODE':int})
+            
+            self.df_SM61 = df_SM6.loc[df_SM6['PROVIDERTYPE'] == prodType]
+            self.df_SM61.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','STATE','ZIPCODE'],inplace=True)
+            
+            self.df_matched = self.df_SM61.merge(self.df_PR61, on=['FIRSTNAME','LASTNAME','STREET1','STATE','ZIPCODE'],indicator=True, suffixes=('_SM61','_PR61'))
+            self.df_TIER61 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER61.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER61['TIER'] = np.where(self.df_TIER61['TIER'] == 'both',6,0)
+            self.df_TIER61['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER61
+            
+        elif prodType == 2:
+            self.df_PR62 = df_PR6.loc[df_PR6['PROVIDERTYPE'] == prodType]
+            self.df_PR62.dropna(subset=['FACILITYNAME','STREET1','STATE','ZIPCODE'],inplace=True)
+            #self.df_PR62['ZIPCODE'] = self.df_PR62['ZIPCODE'].astype(int)
+            self.df_PR62 = self.df_PR62.astype({'ZIPCODE':int})
+            
+            self.df_SM62 = df_SM6.loc[df_SM6['PROVIDERTYPE'] == prodType]
+            self.df_SM62.dropna(subset=['FACILITYNAME','STREET1','STATE','ZIPCODE'],inplace=True)
+            
+            self.df_matched = self.df_SM62.merge(self.df_PR62, on=['FACILITYNAME','STREET1','STATE','ZIPCODE'],indicator=True, suffixes=('_SM62','_PR62'))
+            self.df_TIER62 = self.df_matched[['IMPORTID','PROVIDERID','_merge']].drop_duplicates()
+            self.df_TIER62.rename(columns={'_merge':'TIER'}, inplace=True)
+            self.df_TIER62['TIER'] = np.where(self.df_TIER62['TIER'] == 'both',6,0)
+            self.df_TIER62['CONFIDANCE_SCORE'] = 0
+            return self.df_TIER62
+
+    def tier7DataRetrieve(self):
+        self.cursor.execute('select * from TEST_ZELIS.PUBLIC.STANDARDMAPPER')
+        self.df_SM = self.cursor.fetch_pandas_all()
+        
+        self.cursor.execute('select p.*,pa.street1,pa.street2,pa.city,pa.state, pa.zipcode from TEST_ZELIS.PUBLIC.PROVIDER p, TEST_ZELIS.PUBLIC.PROVIDERADDRESS pa where p.providerid=pa.providerid')
+        self.df_PR = self.cursor.fetch_pandas_all()
+
+        return self.df_SM, self.df_PR
+
+    def updatedTier7(self,df_SM7,df_PR7):
+        #ProviderType 1
+        self.df_SM71 = df_SM7.loc[df_SM7['PROVIDERTYPE'] == 1]
+        self.df_PR71 = df_PR7.loc[df_PR7['PROVIDERTYPE'] == 1]
+        self.df_SM71.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','CITY','STATE','ZIPCODE'], inplace=True)
+        self.df_PR71.dropna(subset=['FIRSTNAME','LASTNAME','STREET1','CITY','STATE','ZIPCODE'], inplace=True)
+        self.df_SM71 = self.df_SM71.astype({'ZIPCODE':str})
+        self.df_PR71 = self.df_PR71.astype({'ZIPCODE':str})
+        self.df_SM71['STREET2'].fillna('',inplace=True)
+        self.df_PR71['STREET2'].fillna('',inplace=True)
+
+        self.df_final_SM71 = pd.DataFrame()
+        self.df_final_SM71['IMPORTID'] = self.df_SM71['IMPORTID']
+        self.df_final_SM71['PROVIDERID'] = self.df_PR71['PROVIDERID']
+        self.df_final_SM71['FN_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['FIRSTNAME'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['FIRSTNAME'])))),columns=['FN_SCORE'])
+        self.df_final_SM71['LN_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['LASTNAME'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['LASTNAME'])))),columns=['LN_SCORE'])
+        self.df_final_SM71['S1_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['STREET1'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['STREET1'])))),columns=['S1_SCORE'])
+        self.df_final_SM71['S2_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['STREET2'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['STREET2'])))),columns=['S2_SCORE'])
+        self.df_final_SM71['CT_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['CITY'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['CITY'])))),columns=['CT_SCORE'])
+        self.df_final_SM71['ST_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['STATE'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['STATE'])))),columns=['ST_SCORE'])
+        self.df_final_SM71['ZC_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM71['ZIPCODE'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR71['ZIPCODE'])))),columns=['ZC_SCORE'])
+
+        self.df_final_SM71['TIER'] = 1
+        self.df_final_SM71['CONFIDANCE_SCORE'] = self.df_final_SM71[['FN_SCORE','LN_SCORE','S1_SCORE','S2_SCORE','CT_SCORE','ST_SCORE','ZC_SCORE']].mean(axis=1)
+
+        #ProviderType 2
+        self.df_SM72 = df_SM7.loc[df_SM7['PROVIDERTYPE'] == 2]
+        self.df_PR72 = df_PR7.loc[df_PR7['PROVIDERTYPE'] == 2]
+        self.df_SM72.dropna(subset=['FACILITYNAME','STREET1','CITY','STATE','ZIPCODE'], inplace=True)
+        self.df_PR72.dropna(subset=['FACILITYNAME','STREET1','CITY','STATE','ZIPCODE'], inplace=True)
+        self.df_SM72 = self.df_SM72.astype({'ZIPCODE':str})
+        self.df_PR72 = self.df_PR72.astype({'ZIPCODE':str})
+        self.df_SM72['STREET2'].fillna('',inplace=True)
+        self.df_PR72['STREET2'].fillna('',inplace=True)
+
+        self.df_final_SM72 = pd.DataFrame()
+        self.df_final_SM72['IMPORTID'] = self.df_SM72['IMPORTID']
+        self.df_final_SM72['PROVIDERID'] = self.df_PR72['PROVIDERID']
+        self.df_final_SM72['FCN_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM72['FACILITYNAME'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR72['FACILITYNAME'])))),columns=['FCN_SCORE'])
+        self.df_final_SM72['S1_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM72['STREET1'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR72['STREET1'])))),columns=['S1_SCORE'])
+        self.df_final_SM72['S2_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM72['STREET2'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR72['STREET2'])))),columns=['S2_SCORE'])
+        self.df_final_SM72['CT_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM72['CITY'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR72['CITY'])))),columns=['CT_SCORE'])
+        self.df_final_SM72['ST_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM72['STATE'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR72['STATE'])))),columns=['ST_SCORE'])
+        self.df_final_SM72['ZC_SCORE'] = pd.DataFrame(list(map(lambda y:y[1] , self.df_SM72['ZIPCODE'].map(lambda IR_name:process.extractOne(IR_name,self.df_PR72['ZIPCODE'])))),columns=['ZC_SCORE'])
+            
+        self.df_final_SM72['TIER'] = 1
+        self.df_final_SM72['CONFIDANCE_SCORE'] = self.df_final_SM72[['FCN_SCORE','S1_SCORE','S2_SCORE','CT_SCORE','ST_SCORE','ZC_SCORE']].mean(axis=1)
+        self.df_tier7score = self.df_final_SM71[['IMPORTID','PROVIDERID','TIER','CONFIDANCE_SCORE']].append(self.df_final_SM72[['IMPORTID','PROVIDERID','TIER','CONFIDANCE_SCORE']])
+        self.df_tier7score.dropna(subset=['IMPORTID','PROVIDERID','TIER','CONFIDANCE_SCORE'], inplace=True)
+        self.df_tier7score = self.df_tier7score.astype({'PROVIDERID':int})
+
+        return self.df_tier7score
+
+
+
+mapProd = stgMapper()
+mapProd.statusAddition()
+
+#Tier 1
+smTab, prTab = mapProd.tier1DataRetrieve()
+tier1Result = mapProd.updatedTier1(smTab,prTab)
+mapProd.dataInsertion(tier1Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.statusUpdate()
+
+#Tier 2
+smTab = mapProd.tier2DataRetrieve()
+tier2Result = mapProd.updatedTier2(smTab,prTab)
+mapProd.dataInsertion(tier2Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.statusUpdate()
+
+#TIER 3 
+smTab, prTab = mapProd.tier3DataRetrieve()
+tier3T1Result = mapProd.updatedTier3(smTab,prTab,1)
+tier3T2Result = mapProd.updatedTier3(smTab,prTab,2)
+mapProd.dataInsertion(tier3T1Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.dataInsertion(tier3T2Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.statusUpdate()
+
+#Tier 4
+smTab, prTab = mapProd.tier4DataRetrieve()
+tier4T1Result = mapProd.updatedTier4(smTab,prTab,1)
+tier4T2Result = mapProd.updatedTier4(smTab,prTab,2)
+mapProd.dataInsertion(tier4T1Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.dataInsertion(tier4T2Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.statusUpdate()
+
+#Tier 5
+smTab, prTab = mapProd.tier5DataRetrieve()
+tier5T1Result = mapProd.updatedTier5(smTab,prTab,1)
+tier5T2Result = mapProd.updatedTier5(smTab,prTab,2)
+mapProd.dataInsertion(tier5T1Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.dataInsertion(tier5T2Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.statusUpdate()
+
+#Tier 6
+smTab, prTab = mapProd.tier6DataRetrieve()
+tier6T1Result = mapProd.updatedTier6(smTab,prTab,1)
+tier6T2Result = mapProd.updatedTier6(smTab,prTab,2)
+mapProd.dataInsertion(tier6T1Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.dataInsertion(tier6T2Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.statusUpdate()
+
+#Tier 7
+smTab, prTab = mapProd.tier7DataRetrieve()
+tier7T12Result = mapProd.updatedTier7(smTab,prTab)
+mapProd.dataInsertion(tier7T12Result, 'STG_PROVIDER_STANDARDMAPPER', 'PUBLIC')
+mapProd.closeConnection()
