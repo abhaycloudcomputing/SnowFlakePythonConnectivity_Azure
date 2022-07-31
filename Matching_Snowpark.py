@@ -1,14 +1,24 @@
 from snowflake.snowpark import Session
 
+# connection_parameters = {
+#    "account": "ti97672.east-us-2.azure",
+#    "user": "SVC_PYTHONIDE",
+#    "password": "Welcome12345",
+#    "role": "ACCOUNTADMIN",
+#    "database": "DEV_PROVIDER_REGISTRY",
+#    "schema": "PUBLIC",
+#    "warehouse": "DEV",
+# }
+
 connection_parameters = {
-   "account": "ti97672.east-us-2.azure",
-   "user": "SVC_PYTHONIDE",
-   "password": "Welcome12345",
-   "role": "ACCOUNTADMIN",
-   "database": "DEV_PROVIDER_REGISTRY",
-   "schema": "PUBLIC",
-   "warehouse": "DEV",
-}
+    "account": "un97199.us-east-2.aws",
+    "user": "aditipriya",
+    "password": "Ewn7sz4n",
+    "role": "ACCOUNTADMIN",
+    "database": "DATAMATCHING",
+    "schema": "PUBLIC",
+    "warehouse": "ABHAY_WAREHOUSE",
+ }
 
 session = Session.builder.configs(connection_parameters).create()
 df = session.create_dataframe([[1, 2], [3, 4]], schema=["a", "b"])
